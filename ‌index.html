@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Shift Whiteboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 20px auto; padding: 20px; }
+        .section { border: 1px solid #ccc; margin: 20px 0; padding: 15px; }
+        .item-list { margin: 10px 0; }
+        .item { padding: 5px; background: #f9f9f9; margin: 5px 0; display: flex; justify-content: space-between; }
+        .delete-btn { background: #ff4444; color: white; border: none; padding: 2px 8px; cursor: pointer; }
+        .input-group { margin: 10px 0; }
+        input[type="text"] { padding: 5px; width: 70%; }
+        .add-btn { padding: 5px 10px; background: #4CAF50; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Shift Whiteboard</h1>
+    {% for section_name, section_key in {
+        'New Products': 'new_products',
+        'Low Products': 'low_products',
+        'Out of Stock': 'out_of_stock',
+        'Expiring Edibles': 'expiring',
+        'Shift Notes': 'shift_notes'
+    }.items() %}
+    <div class="section">
+        <h2>{{ section_name }}</h2>
+        <div class="item-list" id="{{ section_key }}-list">
+            {% for item in data[section_key] %}
+            <div class="item">
+                {{ item }}
+                <button class="delete-btn" onclick="deleteItem('{{ section_key }}', {{ loop.index0 }})">Delete</button>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="input-group">
+            <input type="text" id="{{ section_key }}-input" placeholder="Add {{ section_name.lower() }}">
+            <button class="add-btn" onclick="addItem('{{ section_key }}')">Add</button>
+        </div>
+    </div>
+    {% endfor %}
+    <script>
+        async function addItem(section) {
+            const input = document.getElementById(`${section}-input`);
+            const item = input.value.trim();
+            if (!item) return;
+            const response = await fetch('/add_item', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `section=${section}&item=${encodeURIComponent(item)}`
+            });
+            const result = await response.json();
+            if (result.success) {
+                const list = document.getElementById(`${section}-list`);
+                const div = document.createElement('div');
+                div.className = 'item';
+                div.innerHTML = `${result.item}<button class="delete-btn" onclick="deleteItem('${section}', ${list.children.length})">Delete</button>`;
+                list.appendChild(div);
+                input.value = '';
+            }
+        }
+        async function deleteItem(section, index) {
+            const response = await fetch('/delete_item', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `section=${section}&index=${index}`
+            });
+            const result = await response.json();
+            if (result.success) {
+                const list = document.getElementById(`${section}-list`);
+                list.children[index].remove();
+            }
+        }
+        document.querySelectorAll('input').forEach(input => {
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    const section = this.id.split('-')[0] + '_' + this.id.split('-')[1];
+                    addItem(section);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
