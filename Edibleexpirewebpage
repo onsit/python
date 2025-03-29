@@ -1,0 +1,123 @@
+import pandas as pd
+from datetime import datetime
+from flask import Flask, request, render_template_string, redirect, url_for
+import os
+
+app = Flask(__name__)
+
+# Current date (can be dynamic with datetime.now() later)
+current_date = datetime(2025, 3, 28)
+
+# Path to store the CSV file
+CSV_PATH = 'edibles.csv'
+
+# Function to determine discount status
+def get_discount_status(exp_date):
+    if pd.isna(exp_date):
+        return "No expiration"  # Filtered out later
+    days_to_expire = (exp_date - current_date).days
+    if days_to_expire > 7:
+        return "Not discounted"
+    elif 0 <= days_to_expire <= 7:
+        return "20% off"
+    elif -7 <= days_to_expire < 0:
+        return "40% off"
+    else:
+        return "Remove from shelf"
+
+# Load and process data
+def load_and_process_data():
+    try:
+        data = pd.read_csv(CSV_PATH)
+    except FileNotFoundError:
+        return pd.DataFrame(), "Error: 'edibles.csv' not found. Please upload a CSV file."
+
+    data['Expiration date'] = pd.to_datetime(data['Expiration date'], errors='coerce')
+    data['Discount Status'] = data['Expiration date'].apply(get_discount_status)
+    # Filter out "No expiration" items
+    data = data[data['Discount Status'] != "No expiration"]
+
+    # Prepare display data
+    display_data = data[['SKU', 'Product', 'Expiration date', 'Quantity (including allocated)',
+                         'Current price', 'Discount Status']].copy()
+    display_data['Expiration date'] = display_data['Expiration date'].apply(
+        lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else 'N/A'
+    )
+    display_data['Current price'] = display_data['Current price'].apply(lambda x: f"${x:.2f}")
+
+    return display_data, None
+
+# HTML template as a string
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Edibles Inventory Status</title>
+    <style>
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid black; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .remove-from-shelf { background-color: #FF6347; }
+        .forty-off { background-color: #FF99FF; }
+        .twenty-off { background-color: #FFFF99; }
+        .not-discounted { background-color: #90EE90; }
+    </style>
+</head>
+<body>
+    <h2>Edibles Inventory Status (Generated on {{ current_date.strftime('%Y-%m-%d') }})</h2>
+    <form method="post" enctype="multipart/form-data">
+        <input type="file" name="csv_file" accept=".csv">
+        <input type="submit" value="Upload New CSV">
+    </form>
+    {% if error %}
+        <p style="color: red;">{{ error }}</p>
+    {% endif %}
+    {% if not display_data.empty %}
+        {% for status in status_order %}
+            {% set group = display_data[display_data['Discount Status'] == status] %}
+            {% if not group.empty %}
+                <h3>{{ status.upper() }} ({{ group.shape[0] }} items)</h3>
+                <table>
+                    <tr>
+                        <th>SKU</th><th>Product</th><th>Expiration Date</th>
+                        <th>Quantity</th><th>Price</th><th>Status</th>
+                    </tr>
+                    {% for _, row in group.sort_values(by='Expiration date', ascending=True).iterrows() %}
+                        <tr class="{{ row['Discount Status'].replace(' ', '-').lower() }}">
+                            <td>{{ row['SKU'] }}</td>
+                            <td>{{ row['Product'] }}</td>
+                            <td>{{ row['Expiration date'] }}</td>
+                            <td>{{ row['Quantity (including allocated)'] }}</td>
+                            <td>{{ row['Current price'] }}</td>
+                            <td>{{ row['Discount Status'] }}</td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            {% endif %}
+        {% endfor %}
+    {% endif %}
+</body>
+</html>
+"""
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        file = request.files.get('csv_file')
+        if file and file.filename.endswith('.csv'):
+            file.save(CSV_PATH)
+            return redirect(url_for('index'))
+
+    display_data, error = load_and_process_data()
+    status_order = ["Remove from shelf", "40% off", "20% off", "Not discounted"]
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        display_data=display_data,
+        error=error,
+        status_order=status_order,
+        current_date=current_date
+    )
+
+if __name__ == '__main__':
+    app.run(debug=True)
