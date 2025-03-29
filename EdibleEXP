@@ -1,0 +1,83 @@
+import pandas as pd
+from datetime import datetime
+from IPython.display import display, HTML
+
+# Current date (March 28, 2025)
+current_date = datetime(2025, 3, 28)
+
+# Load data
+try:
+    data = pd.read_csv('edibles.csv')
+except FileNotFoundError:
+    print("Error: 'edibles.csv' not found. Please upload the file to Carnets.")
+    raise
+
+# Convert expiration date to datetime
+data['Expiration date'] = pd.to_datetime(data['Expiration date'], errors='coerce')
+
+# Function to determine discount status
+def get_discount_status(exp_date):
+    if pd.isna(exp_date):
+        return "No expiration"  # Will filter these out
+    days_to_expire = (exp_date - current_date).days
+    if days_to_expire > 7:
+        return "Not discounted"
+    elif 0 <= days_to_expire <= 7:
+        return "20% off"
+    elif -7 <= days_to_expire < 0:
+        return "40% off"
+    else:
+        return "Remove from shelf"
+
+# Apply discount status
+data['Discount Status'] = data['Expiration date'].apply(get_discount_status)
+
+# Filter out "No expiration" items
+data = data[data['Discount Status'] != "No expiration"]
+
+# Prepare display data
+display_data = data[[
+    'SKU', 'Product', 'Expiration date', 'Quantity (including allocated)', 
+    'Current price', 'Discount Status'
+]].copy()
+display_data['Expiration date'] = display_data['Expiration date'].apply(
+    lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else 'N/A'
+)
+display_data['Current price'] = display_data['Current price'].apply(lambda x: f"${x:.2f}")
+
+# Color coding function
+def color_status(val):
+    if val == "Not discounted":
+        return 'background-color: #90EE90'  # Light green
+    elif val == "20% off":
+        return 'background-color: #FFFF99'  # Light yellow
+    elif val == "40% off":
+        return 'background-color: #FF99FF'  # Light magenta
+    elif val == "Remove from shelf":
+        return 'background-color: #FF6347'  # Tomato red
+    return ''
+
+# Display header
+display(HTML(f"<h2>Edibles Inventory Status (Generated on {current_date.strftime('%Y-%m-%d')})</h2>"))
+
+# Define order of statuses
+status_order = ["Remove from shelf", "40% off", "20% off", "Not discounted"]
+
+# Display styled table for each status, sorted by expiration date (oldest first)
+for status in status_order:
+    group = display_data[display_data['Discount Status'] == status]
+    if not group.empty:
+        # Sort by 'Expiration date' in ascending order (oldest at top)
+        sorted_group = group.sort_values(by='Expiration date', ascending=True)
+        display(HTML(f"<h3>{status.upper()} ({len(sorted_group)} items)</h3>"))
+        styled_group = sorted_group.style.applymap(color_status, subset=['Discount Status'])
+        display(styled_group)
+
+# Save to CSV (sorted by discount status and expiration date)
+sorted_data = pd.concat([
+    display_data[display_data['Discount Status'] == status].sort_values(by='Expiration date', ascending=True)
+    for status in status_order
+])
+output_file = f'edibles_with_discount_status_{current_date.strftime("%Y%m%d")}.csv'
+sorted_data.to_csv(output_file, index=False)
+print(f"Data saved to '{output_file}'")
