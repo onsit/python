@@ -1,3 +1,13 @@
+#Overview of the App
+#This is a Flask web application that combines two tools:
+
+# Inventory Management: Tracks edible products (from a CSV file), calculates 
+# discounts based on expiration dates, and displays them in a table.
+# Whiteboard Replacement: A digital "whiteboard" for managing lists (e.g., new products, 
+# low stock, shift notes) stored in a JSON file.
+# We added a home page to tie them together, making it a single app with 
+# multiple features. It’s hosted on PythonAnywhere, a platform that runs Flask apps online.
+
 import pandas as pd
 from datetime import datetime
 from flask import Flask, request, render_template, redirect, url_for, jsonify
