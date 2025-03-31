@@ -1,0 +1,108 @@
+import pandas as pd
+from datetime import datetime
+from flask import Flask, request, render_template, redirect, url_for, jsonify
+import os
+import json
+
+app = Flask(__name__)
+
+# --- Shared Setup ---
+current_date = datetime(2025, 3, 30)  # Update as needed
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, 'edibles.csv')
+DATA_FILE = os.path.join(BASE_DIR, 'whiteboard_data.json')
+
+# --- Inventory Management (Script 1) ---
+def get_discount_status(exp_date):
+    if pd.isna(exp_date):
+        return "No expiration"
+    days_to_expire = (exp_date - current_date).days
+    if days_to_expire > 7:
+        return "Not discounted"
+    elif 0 <= days_to_expire <= 7:
+        return "20% off"
+    elif -7 <= days_to_expire < 0:
+        return "40% off"
+    else:
+        return "Remove from shelf"
+
+def load_and_process_data():
+    try:
+        data = pd.read_csv(CSV_PATH)
+    except FileNotFoundError:
+        return pd.DataFrame(), "Error: 'edibles.csv' not found. Please upload a CSV file."
+    
+    data['Expiration date'] = pd.to_datetime(data['Expiration date'], errors='coerce')
+    data['Discount Status'] = data['Expiration date'].apply(get_discount_status)
+    data = data[data['Discount Status'] != "No expiration"]
+    
+    display_data = data[['SKU', 'Product', 'Expiration date', 'Quantity (including allocated)', 'Current price', 'Discount Status']].copy()
+    display_data['Expiration date'] = display_data['Expiration date'].apply(
+        lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else 'N/A'
+    )
+    display_data['Current price'] = display_data['Current price'].apply(lambda x: f"${x:.2f}")
+    return display_data, None
+
+@app.route('/inventory', methods=['GET', 'POST'])
+def inventory():
+    if request.method == 'POST':
+        file = request.files.get('csv_file')
+        if file and file.filename.endswith('.csv'):
+            file.save(CSV_PATH)
+            return redirect(url_for('inventory'))
+    
+    display_data, error = load_and_process_data()
+    status_order = ["Remove from shelf", "40% off", "20% off", "Not discounted"]
+    return render_template('inventory.html', display_data=display_data, error=error, 
+                          status_order=status_order, current_date=current_date)
+
+# --- Whiteboard Replacement (Script 2) ---
+def load_data():
+    try:
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        default_data = {"new_products": [], "low_products": [], "out_of_stock": [], "expiring": [], "shift_notes": []}
+        save_data(default_data)
+        return default_data
+
+def save_data(data):
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
+@app.route('/whiteboard')
+def whiteboard():
+    data = load_data()
+    return render_template('whiteboard.html', data=data)
+
+@app.route('/add_item', methods=['POST'])
+def add_item():
+    data = load_data()
+    section = request.form['section']
+    item = request.form['item'].strip()
+    if item and section in data:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        full_item = f"{item} (Added: {timestamp})"
+        data[section].append(full_item)
+        save_data(data)
+        return jsonify({'success': True, 'item': full_item})
+    return jsonify({'success': False})
+
+@app.route('/delete_item', methods=['POST'])
+def delete_item():
+    data = load_data()
+    section = request.form['section']
+    index = int(request.form['index'])
+    if section in data and 0 <= index < len(data[section]):
+        data[section].pop(index)
+        save_data(data)
+        return jsonify({'success': True})
+    return jsonify({'success': False})
+
+# --- Homepage ---
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+if __name__ == '__main__':
+    app.run(debug=True)
