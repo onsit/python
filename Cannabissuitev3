@@ -1,0 +1,237 @@
+import pandas as pd
+from datetime import datetime
+from flask import Flask, request, render_template, redirect, url_for, jsonify
+import os
+import json
+
+app = Flask(__name__)
+
+# --- Shared Setup ---
+current_date = datetime.now()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, 'edibles.csv')
+DATA_FILE = os.path.join(BASE_DIR, 'whiteboard_data.json')
+
+# --- Inventory Management ---
+def get_discount_status(exp_date):
+    if pd.isna(exp_date):
+        return "No expiration"
+    days_to_expire = (exp_date - current_date).days
+    if days_to_expire > 7:
+        return "Not discounted"
+    elif 0 <= days_to_expire <= 7:
+        return "20% off"
+    elif -7 <= days_to_expire < 0:
+        return "40% off"
+    else:
+        return "Remove from shelf"
+
+def load_and_process_data():
+    try:
+        data = pd.read_csv(CSV_PATH)
+    except FileNotFoundError:
+        return pd.DataFrame(), "Error: 'edibles.csv' not found. Please upload a CSV file."
+
+    data['Expiration date'] = pd.to_datetime(data['Expiration date'], errors='coerce')
+    data['Discount Status'] = data['Expiration date'].apply(get_discount_status)
+    data = data[data['Discount Status'] != "No expiration"]
+    data = data.sort_values(by='Expiration date', ascending=True)
+
+    required_columns = ['SKU', 'Product', 'Expiration date', 'Quantity (including allocated)', 'Current price', 'Discount Status']
+    available_columns = [col for col in required_columns if col in data.columns]
+    if 'Batch ID' in data.columns:
+        available_columns.insert(1, 'Batch ID')
+
+    display_data = data[available_columns].copy()
+    display_data['Expiration date'] = display_data['Expiration date'].apply(
+        lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else 'N/A'
+    )
+    display_data['Current price'] = display_data['Current price'].apply(lambda x: f"${x:.2f}")
+    return display_data, None
+
+@app.route('/inventory', methods=['GET', 'POST'])
+def inventory():
+    if request.method == 'POST':
+        file = request.files.get('csv_file')
+        if file and file.filename.endswith('.csv'):
+            file.save(CSV_PATH)
+            return redirect(url_for('inventory'))
+
+    display_data, error = load_and_process_data()
+    status_order = ["Remove from shelf", "40% off", "20% off", "Not discounted"]
+    return render_template('inventory.html', display_data=display_data, error=error,
+                          status_order=status_order, current_date=current_date)
+
+@app.route('/delete_inventory_item', methods=['POST'])
+def delete_inventory_item():
+    try:
+        index = int(request.form['index'])
+        data = pd.read_csv(CSV_PATH)
+        if 0 <= index < len(data):
+            data = data.drop(index).reset_index(drop=True)
+            data.to_csv(CSV_PATH, index=False)
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': 'Invalid index'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# --- Whiteboard Replacement ---
+def load_data():
+    try:
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        default_data = {"new_products": [], "low_products": [], "out_of_stock": [], "expiring": [], "shift_notes": []}
+        save_data(default_data)
+        return default_data
+
+def save_data(data):
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
+@app.route('/whiteboard')
+def whiteboard():
+    data = load_data()
+    return render_template('whiteboard.html', data=data)
+
+@app.route('/add_item', methods=['POST'])
+def add_item():
+    data = load_data()
+    section = request.form['section']
+    item = request.form['item'].strip()
+    if item and section in data:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        full_item = f"{item} (Added: {timestamp})"
+        data[section].append(full_item)
+        save_data(data)
+        return jsonify({'success': True, 'item': full_item})
+    return jsonify({'success': False})
+
+@app.route('/delete_item', methods=['POST'])
+def delete_item():
+    data = load_data()
+    section = request.form['section']
+    index = int(request.form['index'])
+    if section in data and 0 <= index < len(data[section]):
+        data[section].pop(index)
+        save_data(data)
+        return jsonify({'success': True})
+    return jsonify({'success': False})
+
+# --- Till Calculator ---
+@app.route('/till_calculator', methods=['GET', 'POST'])
+def till_calculator():
+    if request.method == 'POST':
+        try:
+            # Get counts from form
+            counts = {
+                'dollar': int(request.form.get('dollar', 0)),
+                'five': int(request.form.get('five', 0)),
+                'ten': int(request.form.get('ten', 0)),
+                'twenty': int(request.form.get('twenty', 0)),
+                'fifty': int(request.form.get('fifty', 0)),
+                'hundred': int(request.form.get('hundred', 0)),
+                'penny': int(request.form.get('penny', 0)),
+                'nickel': int(request.form.get('nickel', 0)),
+                'dime': int(request.form.get('dime', 0)),
+                'quarter': int(request.form.get('quarter', 0)),
+                'penny_roll': int(request.form.get('penny_roll', 0)),
+                'nickel_roll': int(request.form.get('nickel_roll', 0)),
+                'dime_roll': int(request.form.get('dime_roll', 0)),
+                'quarter_roll': int(request.form.get('quarter_roll', 0))
+            }
+
+            # Calculate values
+            values = {
+                'dollar': counts['dollar'] * 1,
+                'five': counts['five'] * 5,
+                'ten': counts['ten'] * 10,
+                'twenty': counts['twenty'] * 20,
+                'fifty': counts['fifty'] * 50,
+                'hundred': counts['hundred'] * 100,
+                'penny': counts['penny'] * 0.01,
+                'nickel': counts['nickel'] * 0.05,
+                'dime': counts['dime'] * 0.10,
+                'quarter': counts['quarter'] * 0.25,
+                'penny_roll': counts['penny_roll'] * 0.5,
+                'nickel_roll': counts['nickel_roll'] * 2,
+                'dime_roll': counts['dime_roll'] * 5,
+                'quarter_roll': counts['quarter_roll'] * 10
+            }
+
+            # Total till
+            till_total = sum(values.values())
+
+            # Initial drop: remove $100s, $50s, $20s
+            drop_start = till_total - values['hundred'] - values['fifty'] - values['twenty']
+            drop_counts = counts.copy()
+            drop_counts['hundred'] = 0
+            drop_counts['fifty'] = 0
+            drop_counts['twenty'] = 0
+
+            # Adjust drop to be between $300 and $420
+            add_twenties = 0
+            remove_fives = 0
+            remove_tens = 0
+
+            # If under $300, add $20s
+            while drop_start < 300:
+                drop_start += 20
+                add_twenties += 1
+                drop_counts['twenty'] += 1
+
+            # If over $420, remove $10s and $5s (prefer $10s if more abundant)
+            while drop_start > 420:
+                if drop_counts['ten'] > drop_counts['five'] and drop_counts['ten'] > 0:
+                    drop_start -= 10
+                    remove_tens += 1
+                    drop_counts['ten'] -= 1
+                elif drop_counts['five'] > 0:
+                    drop_start -= 5
+                    remove_fives += 1
+                    drop_counts['five'] -= 1
+                else:
+                    break  # Stop if no more $5s or $10s to remove
+
+            # Calculate drop values
+            drop_values = {
+                'dollar': drop_counts['dollar'] * 1,
+                'five': drop_counts['five'] * 5,
+                'ten': drop_counts['ten'] * 10,
+                'twenty': drop_counts['twenty'] * 20,
+                'fifty': drop_counts['fifty'] * 50,
+                'hundred': drop_counts['hundred'] * 100,
+                'penny': drop_counts['penny'] * 0.01,
+                'nickel': drop_counts['nickel'] * 0.05,
+                'dime': drop_counts['dime'] * 0.10,
+                'quarter': drop_counts['quarter'] * 0.25,
+                'penny_roll': drop_counts['penny_roll'] * 0.5,
+                'nickel_roll': drop_counts['nickel_roll'] * 2,
+                'dime_roll': drop_counts['dime_roll'] * 5,
+                'quarter_roll': drop_counts['quarter_roll'] * 10
+            }
+
+            # Format results
+            results = {
+                'counts': counts,
+                'values': {k: f"{v:.2f}" for k, v in values.items()},
+                'till_total': f"{till_total:.2f}",
+                'drop_counts': drop_counts,
+                'drop_values': {k: f"{v:.2f}" for k, v in drop_values.items()},
+                'drop_total': f"{drop_start:.2f}",
+                'adjustments': {'add_twenties': add_twenties, 'remove_fives': remove_fives, 'remove_tens': remove_tens}
+            }
+
+            return render_template('till_calculator.html', results=results)
+        except ValueError:
+            error = "Input error: Please enter valid numbers!"
+            return render_template('till_calculator.html', error=error)
+    return render_template('till_calculator.html')
+
+# --- Homepage ---
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+if __name__ == '__main__':
+    app.run(debug=True)
